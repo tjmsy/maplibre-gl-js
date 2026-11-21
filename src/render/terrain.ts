@@ -129,6 +129,12 @@ export class Terrain {
      */
     qualityFactor: number;
     /**
+     * Maximum number of drape textures kept across every stack.
+     * Tiles are kept nearest the camera first. Tiles past the budget are drawn and released in the same frame.
+     * `undefined` keeps a texture for every visible tile and stack.
+     */
+    maxRttTextures: number | undefined;
+    /**
      * holds the framebuffer object in size of the screen to render the depth into a texture.
      */
     _fbo: Framebuffer;
@@ -173,6 +179,7 @@ export class Terrain {
         this.exaggeration = typeof options.exaggeration === 'number' ? options.exaggeration : 1.0;
         this._terrainSkirtLength = terrainSkirtLength;
         this.qualityFactor = 2;
+        this.maxRttTextures = undefined;
         this.meshSize = 128;
         this._demMatrixCache = new Map();
         this._minMaxElevationCache = new Map();

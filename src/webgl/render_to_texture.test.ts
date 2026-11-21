@@ -133,6 +133,7 @@ describe('render to texture', () => {
         style._order = ['maine-fill', 'maine-symbol'];
         vi.spyOn(terrain.tileManager, 'getRenderableTiles').mockReturnValue([tile]);
         vi.spyOn(terrain.tileManager, 'getTerrainCoords').mockReturnValue({[tile.tileID.key]: tile.tileID});
+        terrain.maxRttTextures = undefined;
     });
 
     function createFrameRenderContext(): FrameRenderContext {
@@ -286,6 +287,31 @@ describe('render to texture', () => {
         rtt.renderLayer(symbolLayer, style, frameRenderContext);
 
         expect(tile.getRTT(0).texture.bind).toHaveBeenCalledWith(gl.LINEAR, gl.CLAMP_TO_EDGE, gl.LINEAR_MIPMAP_LINEAR);
+    });
+
+    test('a drape budget keeps the nearest tiles and releases the rest after drawing them', () => {
+        const farTile = new Tile(new OverscaledTileID(3, 0, 2, 2, 2), 512);
+        vi.spyOn(terrain.tileManager, 'getRenderableTiles').mockReturnValue([tile, farTile]);
+        (vi.mocked(terrain.tileManager.getTerrainCoords)).mockReturnValue({[tile.tileID.key]: tile.tileID, [farTile.tileID.key]: farTile.tileID});
+        terrain.maxRttTextures = 1;
+        (vi.mocked(painter.releaseRTT)).mockClear();
+
+        const render = () => {
+            rtt.prepareForRender(style, 0, false);
+            const frameRenderContext = createFrameRenderContext();
+            rtt.renderLayer(fillLayer, style, frameRenderContext);
+            rtt.renderLayer(symbolLayer, style, frameRenderContext);
+        };
+        render();
+
+        const kept = tile.getRTT(0);
+        expect(kept).toBeTruthy();
+        expect(farTile.getRTT(0)).toBeUndefined();
+        expect(painter.releaseRTT).toHaveBeenCalled();
+
+        render();
+        expect(tile.getRTT(0)).toBe(kept);
+        expect(farTile.getRTT(0)).toBeUndefined();
     });
 
     test('cache hit reuses cached RTT and skips acquireRTT', () => {

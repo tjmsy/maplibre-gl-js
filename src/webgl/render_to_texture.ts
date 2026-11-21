@@ -43,6 +43,16 @@ function isRenderedToTexture(layer: StyleLayer): boolean {
 }
 
 /**
+ * How many of the nearest tiles may keep their drape textures.
+ * The budget is a texture count shared by every stack, so a style with four stacks and a budget of 30 keeps seven tiles.
+ * `undefined` keeps every visible tile.
+ */
+export function retainedTerrainTileCount(tileCount: number, stackCount: number, budget: number | undefined): number {
+    if (budget === undefined || stackCount <= 0) return tileCount;
+    return Math.min(tileCount, Math.max(0, Math.floor(budget / stackCount)));
+}
+
+/**
  * Returns the ids of the layers in each render stack, a run of layers rendered to texture that ends at a layer
  * that is not.
  */
@@ -112,6 +122,8 @@ export class RenderToTexture {
      * textures rendered at another zoom, and stale textures beyond the per-frame budget.
      */
     needsFollowUpFrame: boolean = false;
+    /** Nearest tiles that keep their drape textures this frame. The rest are drawn and released. */
+    _retainedTileCount: number = 0;
     constructor(painter: Painter, terrain: Terrain) {
         this.painter = painter;
         this.terrain = terrain;
@@ -202,6 +214,12 @@ export class RenderToTexture {
                 this._releaseChangedTextures(tile, style, stacks);
             }
         }
+
+        const stackCount = Math.max(1, stacks.length);
+        this._retainedTileCount = retainedTerrainTileCount(this._renderableTiles.length, stackCount, this.terrain.maxRttTextures);
+        for (const tile of this._renderableTiles.slice(this._retainedTileCount)) {
+            tile.releaseRTT(this.painter);
+        }
     }
 
     /**
@@ -287,34 +305,50 @@ export class RenderToTexture {
             const stack = this._stacks.length - 1, layers = this._stacks[stack] || [];
             frameRenderContext.isRenderingToTexture = true;
             setFrameUniformWorldSize(painter.context.frameUniformBuffer, this.rttSize, this.rttSize);
-            for (const tile of this._renderableTiles) {
-                this._rttTiles.push(tile);
-                // Cache hit: this tile already has a RTT object for this stack from a previous frame.
-                if (tile.getRTT(stack)) continue;
-                const obj = tile.acquireRTT(painter, stack, this.rttSize);
-                painter.bindRTT(obj);
-                painter.context.clear({color: Color.transparent, stencil: 0});
-                frameRenderContext.invalidateTileClippingMasks();
-                for (const layerId of layers) {
-                    const layer = style._layers[layerId];
-                    const coords = layer.source ? this._coordsAscending[layer.source][tile.tileID.key] : [tile.tileID];
-                    painter.context.viewport.set([0, 0, this.rttSize, this.rttSize]);
-                    frameRenderContext.renderTileClippingMasks(layer, coords);
-                    painter.renderLayer(painter, style.tileManagers[layer.source], layer, coords, frameRenderContext);
-                    const fingerprintKey = rttFingerprintKey(layer);
-                    if (fingerprintKey) tile.rttFingerprint[fingerprintKey] = this._rttFingerprints[fingerprintKey][tile.tileID.key];
-                }
-                obj.texture.generateMipmap();
+            const retained = this._renderableTiles.slice(0, this._retainedTileCount);
+            const overflow = this._renderableTiles.slice(this._retainedTileCount);
+            this._renderStackTiles(retained, stack, layers, style, frameRenderContext);
+            drawTerrain(this.painter, this.terrain, retained, frameRenderContext);
+            const budget = this.terrain.maxRttTextures;
+            const room = budget === undefined ? overflow.length : Math.max(1, budget - this._retainedTileCount * (stack + 1));
+            for (let start = 0; start < overflow.length; start += room) {
+                const batch = overflow.slice(start, start + room);
+                this._renderStackTiles(batch, stack, layers, style, frameRenderContext);
+                drawTerrain(this.painter, this.terrain, batch, frameRenderContext);
+                for (const tile of batch) tile.releaseRTTStack(painter, stack);
             }
             frameRenderContext.isRenderingToTexture = false;
             setFrameUniformWorldSize(painter.context.frameUniformBuffer, painter.context.gl.drawingBufferWidth, painter.context.gl.drawingBufferHeight);
-            drawTerrain(this.painter, this.terrain, this._rttTiles, frameRenderContext);
             this._rttTiles = [];
 
             return renderedToTexture;
         }
 
         return false;
+    }
+
+    /**
+     * Draws the stack into each tile's texture. Tiles that already have one for this stack are left as they are.
+     */
+    _renderStackTiles(tiles: Tile[], stack: number, layers: string[], style: Style, frameRenderContext: FrameRenderContext): void {
+        const painter = this.painter;
+        for (const tile of tiles) {
+            if (tile.getRTT(stack)) continue;
+            const obj = tile.acquireRTT(painter, stack, this.rttSize);
+            painter.bindRTT(obj);
+            painter.context.clear({color: Color.transparent, stencil: 0});
+            frameRenderContext.invalidateTileClippingMasks();
+            for (const layerId of layers) {
+                const layer = style._layers[layerId];
+                const coords = layer.source ? this._coordsAscending[layer.source][tile.tileID.key] : [tile.tileID];
+                painter.context.viewport.set([0, 0, this.rttSize, this.rttSize]);
+                frameRenderContext.renderTileClippingMasks(layer, coords);
+                painter.renderLayer(painter, style.tileManagers[layer.source], layer, coords, frameRenderContext);
+                const fingerprintKey = rttFingerprintKey(layer);
+                if (fingerprintKey) tile.rttFingerprint[fingerprintKey] = this._rttFingerprints[fingerprintKey][tile.tileID.key];
+            }
+            obj.texture.generateMipmap();
+        }
     }
 
 }

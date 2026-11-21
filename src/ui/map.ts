@@ -445,6 +445,22 @@ export type MapOptions = {
      */
     terrainSkirtLength?: 'none' | 'auto';
     /**
+     * Maximum number of terrain drape textures kept at once, across every render stack.
+     * The nearest tiles keep theirs. Tiles beyond the budget are drawn and their textures released in the same frame.
+     *
+     * A 2048px RGBA texture with mipmaps is about 21 MiB, and each style stack needs one texture per kept tile.
+     * Leaving this unset keeps every visible tile, which can reach several GiB at high zoom with pitch.
+     * @defaultValue 30
+     */
+    maxTerrainRttTextures?: number;
+    /**
+     * Multiplier for the terrain drape texture size. Must be a power of two.
+     * The texture is `terrainTileSize * terrainQualityFactor` pixels on a side. `2` is 2048px for a 512px DEM with the default terrain tile scaling.
+     * `1` uses a quarter of the memory and a softer drape.
+     * @defaultValue 2
+     */
+    terrainQualityFactor?: number;
+    /**
      * Defines the number of zoom level that will overscale instead of split tiles below (inclusive) a map's `maxZoom`.
      * When `undefined`, all zoom levels after source's max zoom will be overscaled.
      *
@@ -583,6 +599,8 @@ const defaultOptions: Readonly<Partial<MapOptions>> = {
     cancelPendingTileRequestsWhileZooming: true,
     centerClampedToGround: true,
     terrainSkirtLength: 'auto',
+    maxTerrainRttTextures: 30,
+    terrainQualityFactor: 2,
     zoomLevelsToOverscale: 4,
     anisotropicFilterPitch: defaultAnisotropicFilterPitch,
 };
@@ -682,6 +700,8 @@ export class Map extends Evented<MapEventType> {
     /** @internal */
     _zoomLevelsToOverscale: number | undefined;
     _terrainSkirtLength: 'none' | 'auto';
+    _maxTerrainRttTextures: number;
+    _terrainQualityFactor: number;
 
     /**
      * @internal
@@ -823,6 +843,8 @@ export class Map extends Evented<MapEventType> {
         this._canvasContextAttributes = {...resolvedOptions.canvasContextAttributes};
         this._trackResize = resolvedOptions.trackResize === true;
         this._terrainSkirtLength = resolvedOptions.terrainSkirtLength;
+        this._maxTerrainRttTextures = resolvedOptions.maxTerrainRttTextures;
+        this._terrainQualityFactor = resolvedOptions.terrainQualityFactor;
         this._refreshExpiredTiles = resolvedOptions.refreshExpiredTiles === true;
         this._fadeDuration = resolvedOptions.fadeDuration;
         this._crossSourceCollisions = resolvedOptions.crossSourceCollisions === true;
@@ -3124,6 +3146,10 @@ export class Map extends Evented<MapEventType> {
                 this.terrain.destroy();
             }
             this.terrain = new Terrain(this.painter, tileManager, options, this._terrainSkirtLength, () => this._camera.context.worldCoordinateHelper);
+            const quality = this._terrainQualityFactor;
+            this.terrain.qualityFactor = quality >= 1 && (quality & (quality - 1)) === 0 ? quality : 2;
+            const budget = this._maxTerrainRttTextures;
+            this.terrain.maxRttTextures = Number.isFinite(budget) && budget >= 0 ? Math.floor(budget) : 30;
             this.painter.renderToTexture = new RenderToTexture(this.painter, this.terrain);
             this._camera.setTerrain(this.terrain);
             this._terrainDataCallback = e => this._handleTerrainDataEvent(e, options.source);
