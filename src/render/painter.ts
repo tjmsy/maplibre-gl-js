@@ -480,8 +480,8 @@ export class Painter {
         const obj = this._rttObjectRecyclePool.pop();
         if (obj) {
             if (obj.size !== size) {
-                obj.texture.update({width: size, height: size, data: null}, {premultiply: false, useMipmap: true});
-                obj.texture.bind(gl.LINEAR, gl.CLAMP_TO_EDGE, gl.LINEAR_MIPMAP_LINEAR);
+                obj.texture.update({width: size, height: size, data: null}, {premultiply: false});
+                obj.texture.bind(gl.LINEAR, gl.CLAMP_TO_EDGE);
                 if (this.context.extTextureFilterAnisotropic) {
                     gl.texParameterf(gl.TEXTURE_2D, this.context.extTextureFilterAnisotropic.TEXTURE_MAX_ANISOTROPY_EXT, this.context.extTextureFilterAnisotropicMax);
                 }
@@ -489,8 +489,8 @@ export class Painter {
             }
             return obj;
         }
-        const texture = new Texture(this.context, {width: size, height: size, data: null}, gl.RGBA, {premultiply: false, useMipmap: true});
-        texture.bind(gl.LINEAR, gl.CLAMP_TO_EDGE, gl.LINEAR_MIPMAP_LINEAR);
+        const texture = new Texture(this.context, {width: size, height: size, data: null}, gl.RGBA, {premultiply: false});
+        texture.bind(gl.LINEAR, gl.CLAMP_TO_EDGE);
         if (this.context.extTextureFilterAnisotropic) {
             gl.texParameterf(gl.TEXTURE_2D, this.context.extTextureFilterAnisotropic.TEXTURE_MAX_ANISOTROPY_EXT, this.context.extTextureFilterAnisotropicMax);
         }
