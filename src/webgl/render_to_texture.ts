@@ -26,6 +26,8 @@ const LAYERS_TO_TEXTURES: { [keyof in StyleLayer['type']]?: boolean } = {
     'color-relief': true
 };
 
+const MAX_TERRAIN_RTT_BATCH_SIZE = 30;
+
 /**
  * Returns the key under which a tile keeps the fingerprint of the layer, which is the layer's source, or its id for a custom layer.
  */
@@ -138,6 +140,7 @@ export class RenderToTexture {
         this._prevRenderedToTexture = false;
         this._rttTiles = [];
         this._renderableTiles = this.terrain.tileManager.getRenderableTiles();
+        for (const tile of this._renderableTiles) tile.releaseRTT(this.painter);
         this._renderableLayerIds = style._order.filter(id => !style._layers[id].isHidden(zoom));
         const stacks = getRenderStacks(style, this._renderableLayerIds);
         const visibleLayerIds = this._renderableLayerIds.join();
@@ -287,29 +290,31 @@ export class RenderToTexture {
             const stack = this._stacks.length - 1, layers = this._stacks[stack] || [];
             frameRenderContext.isRenderingToTexture = true;
             setFrameUniformWorldSize(painter.context.frameUniformBuffer, this.rttSize, this.rttSize);
-            for (const tile of this._renderableTiles) {
-                this._rttTiles.push(tile);
-                // Cache hit: this tile already has a RTT object for this stack from a previous frame.
-                if (tile.getRTT(stack)) continue;
-                const obj = tile.acquireRTT(painter, stack, this.rttSize);
-                painter.bindRTT(obj);
-                painter.context.clear({color: Color.transparent, stencil: 0});
-                frameRenderContext.invalidateTileClippingMasks();
-                for (const layerId of layers) {
-                    const layer = style._layers[layerId];
-                    const coords = layer.source ? this._coordsAscending[layer.source][tile.tileID.key] : [tile.tileID];
-                    painter.context.viewport.set([0, 0, this.rttSize, this.rttSize]);
-                    frameRenderContext.renderTileClippingMasks(layer, coords);
-                    painter.renderLayer(painter, style.tileManagers[layer.source], layer, coords, frameRenderContext);
-                    const fingerprintKey = rttFingerprintKey(layer);
-                    if (fingerprintKey) tile.rttFingerprint[fingerprintKey] = this._rttFingerprints[fingerprintKey][tile.tileID.key];
+            for (let start = 0; start < this._renderableTiles.length; start += MAX_TERRAIN_RTT_BATCH_SIZE) {
+                const tiles = this._renderableTiles.slice(start, start + MAX_TERRAIN_RTT_BATCH_SIZE);
+                for (const tile of tiles) {
+                    this._rttTiles.push(tile);
+                    const obj = tile.acquireRTT(painter, stack, this.rttSize);
+                    painter.bindRTT(obj);
+                    painter.context.clear({color: Color.transparent, stencil: 0});
+                    frameRenderContext.invalidateTileClippingMasks();
+                    for (const layerId of layers) {
+                        const layer = style._layers[layerId];
+                        const coords = layer.source ? this._coordsAscending[layer.source][tile.tileID.key] : [tile.tileID];
+                        painter.context.viewport.set([0, 0, this.rttSize, this.rttSize]);
+                        frameRenderContext.renderTileClippingMasks(layer, coords);
+                        painter.renderLayer(painter, style.tileManagers[layer.source], layer, coords, frameRenderContext);
+                        const fingerprintKey = rttFingerprintKey(layer);
+                        if (fingerprintKey) tile.rttFingerprint[fingerprintKey] = this._rttFingerprints[fingerprintKey][tile.tileID.key];
+                    }
+                    obj.texture.generateMipmap();
                 }
-                obj.texture.generateMipmap();
+                drawTerrain(this.painter, this.terrain, this._rttTiles, frameRenderContext);
+                for (const tile of this._rttTiles) tile.releaseRTTStack(painter, stack);
+                this._rttTiles = [];
             }
             frameRenderContext.isRenderingToTexture = false;
             setFrameUniformWorldSize(painter.context.frameUniformBuffer, painter.context.gl.drawingBufferWidth, painter.context.gl.drawingBufferHeight);
-            drawTerrain(this.painter, this.terrain, this._rttTiles, frameRenderContext);
-            this._rttTiles = [];
 
             return renderedToTexture;
         }
